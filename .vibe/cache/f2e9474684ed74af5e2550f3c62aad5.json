@@ -1,0 +1,9 @@
+{
+  "kind": "spec_defect",
+  "defect": "unsat",
+  "explanation": "The postcondition requires lo ≤ m < hi and hi ≤ lo, which is contradictory for every input, e.g. lo = 0, hi = 0.",
+  "certificate": "theorem between_unsat : ¬ ∃ f : Nat → Nat → Nat, ∀ lo hi : Nat, lo ≤ f lo hi ∧ f lo hi < hi ∧ hi ≤ lo + 0 := by\n  rintro ⟨f, h⟩\n  have := h 0 0\n  omega",
+  "goal": "lo hi : Nat\n⊢ { m // lo ≤ m ∧ m < hi ∧ hi ≤ lo + 0 }",
+  "decl_name": "between",
+  "checked_at": "2026-10-19T02:01:52"
+}

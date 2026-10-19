@@ -1,0 +1,15 @@
+{
+  "kind": "solution",
+  "script": "refine ⟨xs.mergeSort (fun a b => decide (a ≤ b)), ?_, List.mergeSort_perm _ _⟩\nhave := List.pairwise_mergeSort (le := fun a b => decide (a ≤ b)) (l := xs)\n  (fun a b c => by simpa using Int.le_trans) (fun a b => by simpa using Int.le_total a b)\nsimpa using this",
+  "helpers": "",
+  "notes": "",
+  "holes": 0,
+  "axioms": [
+    "Quot.sound",
+    "propext"
+  ],
+  "spec_check": "Spec is satisfiable and non-vacuous (sorted + permutation).",
+  "goal": "xs : List Int\n⊢ { ys // List.Pairwise (fun x1 x2 => x1 ≤ x2) ys ∧ ys.Perm xs }",
+  "decl_name": "sort",
+  "checked_at": "2026-10-19T02:01:57"
+}

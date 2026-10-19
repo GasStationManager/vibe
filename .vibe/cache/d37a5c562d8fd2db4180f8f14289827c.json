@@ -1,0 +1,15 @@
+{
+  "kind": "solution",
+  "script": "exact match xs with\n  | [] => ⟨[], by simp⟩\n  | x :: t =>\n    if h : x ∈ t then\n      ⟨(dedup t).val, (dedup t).property.1, fun y => by\n        rw [(dedup t).property.2]\n        constructor\n        · intro hy; exact List.mem_cons_of_mem _ hy\n        · intro hy\n          rcases List.mem_cons.mp hy with rfl | hy\n          · exact h\n          · exact hy⟩\n    else\n      ⟨x :: (dedup t).val, List.nodup_cons.mpr ⟨by rw [(dedup t).property.2]; exact h, (dedup t).property.1⟩, fun y => by\n        rw [List.mem_cons, List.mem_cons, (dedup t).property.2]⟩",
+  "helpers": "",
+  "notes": "",
+  "holes": 0,
+  "axioms": [
+    "Quot.sound",
+    "propext"
+  ],
+  "spec_check": "Spec is satisfiable (order-preserving dedup) and not vacuous.",
+  "goal": "xs : List Nat\n⊢ { ys // ys.Nodup ∧ ∀ (x : Nat), x ∈ ys ↔ x ∈ xs }",
+  "decl_name": "dedup",
+  "checked_at": "2026-10-19T02:01:52"
+}

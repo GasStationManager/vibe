@@ -1,0 +1,16 @@
+{
+  "kind": "solution",
+  "script": "exact match xs, h with\n| [], h => absurd rfl h\n| [x], _ => ⟨x, by simp⟩\n| x :: y :: t, _ =>\n  let r := listMax (y :: t) (by simp)\n  ⟨max x r.val, by\n    have h1 := r.property.1\n    have h2 := r.property.2\n    refine ⟨?_, ?_⟩\n    · rcases Int.le_total x r.val with h | h\n      · rw [Int.max_eq_right h]; exact List.mem_cons_of_mem _ h1\n      · rw [Int.max_eq_left h]; exact List.mem_cons_self\n    · intro z hz\n      rcases List.mem_cons.mp hz with rfl | hz\n      · omega\n      · have := h2 z hz; omega⟩",
+  "helpers": "",
+  "notes": "",
+  "holes": 0,
+  "axioms": [
+    "Classical.choice",
+    "Quot.sound",
+    "propext"
+  ],
+  "spec_check": "Spec is satisfiable and non-vacuous: max of a nonempty list exists.",
+  "goal": "xs : List Int\nh : xs ≠ []\n⊢ { m // m ∈ xs ∧ ∀ (x : Int), x ∈ xs → x ≤ m }",
+  "decl_name": "listMax",
+  "checked_at": "2026-10-19T02:02:00"
+}

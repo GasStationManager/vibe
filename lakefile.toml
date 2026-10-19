@@ -1,0 +1,10 @@
+name = "vibe"
+version = "0.1.0"
+defaultTargets = ["Vibe"]
+
+[[lean_lib]]
+name = "Vibe"
+
+[[lean_lib]]
+name = "Examples"
+globs = ["Examples.+"]
