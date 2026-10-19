@@ -1,4 +1,4 @@
-# LeanVibe: the `vibe` tactic
+# vibe: a Lean tactic for provably correct vibe coding
 
 Write the specification as a Lean type, then write `by vibe`:
 
@@ -103,7 +103,7 @@ reads a prompt on stdin and can run shell commands. The default is Claude Code
 # lakefile.toml of your project
 [[require]]
 name = "vibe"
-git = "https://github.com/GasStationManager/LeanVibe"
+git = "https://github.com/GasStationManager/vibe"
 rev = "main"
 ```
 
