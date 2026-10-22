@@ -111,7 +111,7 @@ Options:
 
 | option | default | meaning |
 |---|---|---|
-| `vibe.mode` | `async` | `async`: start the agent in the background and close the goal with `sorry`; re-elaborate the file once the job finishes. `sync`: wait (use this for `lake build`). `offline`: cache only. The `VIBE_MODE` env var overrides it. |
+| `vibe.mode` | `async` | `async`: start the agent in the background, close the goal with `sorry`, and show the result when the job finishes (see *In the editor*). `sync`: wait (use this for `lake build`). `offline`: cache only. The `VIBE_MODE` env var overrides it. |
 | `vibe.llm` | `claude -p --dangerously-skip-permissions` | the agent CLI (or `VIBE_LLM`), e.g. `codex exec -` |
 | `vibe.agent` | `python3 scripts/vibe_agent.py` (or the copy in `.lake/packages/vibe`) | the driver (or `VIBE_AGENT`) |
 | `vibe.style` | `any` | `any` / `coupled` / `split` |
@@ -137,6 +137,35 @@ on the first round, in 17–24 s per hole. Sort used the library's `mergeSort`
 and its lemmas; Dedup and ListMax are recursive with code and proof
 interleaved.
 
+## In the editor
+
+In `async` mode, a cache miss starts the job, closes the goal with `sorry` and
+leaves `vibe: started job …; its result will be shown here`. A watcher then
+waits for the job inside the elaborator. The watcher is a **snapshot task**,
+the mechanism Lean itself uses for background proof checking, so when the job
+finishes the language server publishes its result (`vibe: job finished …
+Try this:`, the spec defect, or the failure) without your editing anything.
+On an edit the server cancels the watcher; the job keeps running, and the next
+elaboration watches it again or finds its cache entry.
+
+Applying the result:
+- **Lightbulb / quick fix.** At the `vibe`, the code action `vibe: apply the
+  checked result` (`Vibe/CodeAction.lean`) reads the job's cache entry. It is
+  plain LSP, so it works in every Lean editor (VS Code, Neovim, Emacs, or any
+  LSP client on `lake serve`).
+- **The `Try this` link in the infoview.** Shown in VS Code and, as far as its
+  widget support goes, in `lean.nvim`. Other editors show the suggestion as
+  text.
+
+Either way, Lean re-checks the applied text like any edit.
+
+While a job runs, requests on positions *inside its declaration* (hover, the
+goal view, code actions) wait for the job. Lean runs a command's linters after
+the command's whole snapshot tree, watcher included, and the command's info
+tree waits for the linters. The rest of the file is unaffected
+(`tests/test_server.py` checks this). Outside the editor, `lean`/`lake build`
+wait for the watcher too, so `async` there ends like `sync`.
+
 ## Tests
 
 ```
@@ -150,7 +179,10 @@ followed by a correct one; refusing `sorry` and `native_decide`; a helper
 suggestion spanning the whole declaration; a helper that changes the spec
 being refused; a certified spec defect; a bogus certificate being refused;
 plan mode with a nested `vibe` hole; a stale cache entry triggering a re-ask;
-async mode; offline mode.
+async mode; offline mode. `tests/test_server.py` drives `lake serve` as an
+editor would: the result is published with no edit, a later declaration
+answers while the job runs, and the lightbulb carries the right edit, for a
+plain solution and for one with helpers.
 
 ## Known limits
 
@@ -165,8 +197,10 @@ async mode; offline mode.
 - The cache is trusted for helper suggestions until you accept them, and once
   accepted it is ordinary Lean. Do not use a `.vibe/cache` from a source you
   do not trust.
-- In async mode the editor does not refresh itself when a job finishes; edit
-  the file or restart it.
+- While a job runs, its own declaration's hover and goal view wait for it
+  (see *In the editor*).
+- The infoview's clickable widget was checked only in its plain-text form;
+  the test client declares no widget support.
 - Backends 2 and 3 from the design (an agent with tools in a scratch copy is
   what runs now; a SearchTool2 tree for large tasks) are not separate yet:
   any CLI agent can be plugged in through `vibe.llm`.

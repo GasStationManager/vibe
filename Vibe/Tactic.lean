@@ -26,7 +26,8 @@ miss and handed back to the agent with the errors.
 Modes (`set_option vibe.mode`, or the `VIBE_MODE` environment variable, which
 wins):
 * `async` (default) — on a miss, start the agent in the background and close
-  the goal with `sorry`; the result appears on the next elaboration.
+  the goal with `sorry`; a snapshot task watches the job and reports its result
+  in the editor when it finishes (see `watchJob`).
 * `sync` — on a miss, run the agent and wait (for `lake build`).
 * `offline` — never start the agent; use the cache or leave a `sorry`.
 -/
@@ -244,6 +245,18 @@ def withLlm (args : Array String) : CoreM (Array String) := do
   let llm := vibe.llm.get (← getOptions)
   return if llm == "" then args else args ++ #["--llm", llm]
 
+/-- The text from the declaration's first line up to the `vibe` token: what a
+helpers suggestion re-emits after the helpers. -/
+def Site.declPrefix (site : Site) : String :=
+  let before := site.lines.extract site.declStart (site.startLine - 1) |>.toList
+  let vibeLine := (site.lines[site.startLine - 1]!).take site.startCol
+  String.intercalate "\n" (before ++ [vibeLine.toString])
+
+/-- The replacement text for a solution with helpers (span: declaration start
+to the end of `vibe`). Shared with the code-action provider. -/
+def helperText (declPrefix : String) (col : Nat) (script helpers : String) : String :=
+  helpers.trimAsciiEnd.toString ++ "\n\n" ++ declPrefix ++ indentAfterFirst script col
+
 /-- The `Try this:` for a solution that needs declarations above this one:
 the replaced span runs from the declaration's first line to the end of `vibe`. -/
 def suggestWithHelpers (stx : Syntax) (site : Site) (script helpers : String) : TacticM Unit := do
@@ -251,12 +264,80 @@ def suggestWithHelpers (stx : Syntax) (site : Site) (script helpers : String) : 
   let startPos := fm.ofPosition ⟨site.declStart + 1, 0⟩
   let endPos := stx.getTailPos?.getD 0
   let span := Syntax.atom (.synthetic startPos endPos) ""
-  let before := site.lines.extract site.declStart (site.startLine - 1) |>.toList
-  let vibeLine := (site.lines[site.startLine - 1]!).take site.startCol
-  let text := helpers.trimAsciiEnd.toString ++ "\n\n" ++
-    String.intercalate "\n" (before ++ [vibeLine.toString ++ indentAfterFirst script site.startCol])
+  let text := helperText site.declPrefix site.startCol script helpers
   Lean.Meta.Tactic.TryThis.addSuggestion stx { suggestion := .string text } (origSpan? := some span)
     (header := "vibe: Try this (adds helper declarations above):")
+
+/-- Left in the info tree at a `vibe` whose job is running. A background task
+cannot add info-tree nodes, so the job's `Try this` has no lightbulb; the
+code-action provider (`Vibe.CodeAction`) finds this node instead and reads
+the cache entry when asked. -/
+structure PendingInfo where
+  key : String
+  col : Nat
+  declStart : String.Pos.Raw
+  declPrefix : String
+  deriving TypeName
+
+def pushPending (stx : Syntax) (site : Site) : TacticM Unit := do
+  let declStart := (← getFileMap).ofPosition ⟨site.declStart + 1, 0⟩
+  let info : PendingInfo :=
+    { key := site.key, col := site.startCol, declStart, declPrefix := site.declPrefix }
+  pushInfoLeaf (.ofCustomInfo { stx, value := Dynamic.mk info })
+
+/-- How the result of a job is reported. The goal is already closed by
+`sorry`, so this can only SAY what came back: a solution as a `Try this`
+whose widget applies it (Lean re-checks it on the next elaboration, as for any
+edit), a spec defect or a failure as an error. -/
+def reportEntry (stx : Syntax) (key : String) : Entry → CoreM Unit
+  | .solution script helpers notes holes => do
+    let notes := if notes.isEmpty then "" else s!"\nAgent notes: {notes}"
+    let modulo := if holes > 0 then s!" modulo {holes} new `vibe` hole(s)" else ""
+    let fm ← getFileMap
+    let col := (fm.toPosition (stx.getPos?.getD 0)).column
+    if helpers.trimAscii.isEmpty then
+      Lean.Meta.Tactic.TryThis.addSuggestion stx { suggestion := .string (indentAfterFirst script col) }
+        (header := s!"vibe: job finished, checked by the agent's checker{modulo}. Try this:")
+    else
+      logInfoAt stx m!"vibe: job finished, checked by the agent's checker{modulo}; the solution \
+        adds helper declarations — apply it from the code actions (lightbulb) at `vibe`."
+    unless notes.isEmpty do logInfoAt stx notes
+  | .specDefect defect explanation certificate =>
+    logErrorAt stx m!"vibe: SPEC DEFECT ({defect}): {explanation}\n\
+      Lean-checked certificate (check that it states the defect of THIS spec):\n{certificate}\n\
+      Fix the specification, or delete .vibe/cache/{key}.json and pass a hint."
+  | .failure message =>
+    logErrorAt stx m!"vibe: the agent gave up: {message}\n\
+      Retry by deleting .vibe/cache/{key}.json, or pass a hint: vibe \"...\""
+
+/-- Watch a running job from inside the elaborator: a SNAPSHOT TASK, the
+mechanism Lean uses for its own background proof checking. The language
+server shows its messages when it finishes, without an edit, and cancels it
+when the file changes (the job itself keeps running; the next elaboration
+finds it, then its cache entry). `lean`/`lake build` wait for it, so outside
+the editor `async` ends like `sync`. -/
+def watchJob (stx : Syntax) (key : String) : CoreM Unit := do
+  let cancelTk ← IO.CancelToken.new
+  let jobFile := (← jobsDir) / s!"{key}.json"
+  let act ← Core.wrapAsyncAsSnapshot (cancelTk? := cancelTk) (desc := "vibe job") fun () => do
+    repeat
+      if ← cancelTk.isSet then return
+      if let some e ← readEntry key then
+        reportEntry stx key e
+        return
+      unless ← jobFile.pathExists do
+        -- the job may have written its entry just before removing its marker
+        if let some e ← readEntry key then
+          reportEntry stx key e
+        else
+          logErrorAt stx m!"vibe: job {key} ended without a result; see .vibe/work/{key}/agent.log"
+        return
+      IO.sleep 500
+  let task ← BaseIO.asTask (prio := .dedicated) (act ())
+  let range : Language.SnapshotTask.ReportingRange := .ofOptionInheriting (stx.getRange?)
+  let snap : Language.SnapshotTask Language.SnapshotTree :=
+    { stx? := none, reportingRange := range, task := task, cancelTk? := some cancelTk }
+  Core.logSnapshotTask snap
 
 partial def evalVibeCore (stx : Syntax) (hint : String) (attempt : Nat) : TacticM Unit := do
   let g ← getMainGoal
@@ -295,15 +376,21 @@ partial def evalVibeCore (stx : Syntax) (hint : String) (attempt : Nat) : Tactic
       Retry by deleting .vibe/cache/{site.key}.json, or pass a hint: vibe \"...\""
   | none =>
     let jobFile := (← jobsDir) / s!"{site.key}.json"
-    if ← jobFile.pathExists then
-      g.admit
-      logWarningAt stx m!"vibe: job {site.key} is running; re-elaborate when it finishes \
-        (or delete {jobFile} if it died)"
-      return
-    match ← mode with
-    | "offline" =>
+    let mode ← mode
+    -- Offline never waits: the checker compiles in offline mode while the job
+    -- that started it holds the marker, and watching it would deadlock.
+    if mode == "offline" then
       g.admit
       logWarningAt stx m!"vibe: no cached result for {site.key} (offline)"
+      return
+    if ← jobFile.pathExists then
+      g.admit
+      logWarningAt stx m!"vibe: job {site.key} is running; its result will be shown here \
+        (delete {jobFile} if it died)"
+      pushPending stx site
+      watchJob stx site.key
+      return
+    match mode with
     | "sync" =>
       let req ← writeRequest site
       let (cmd, args) ← agentCommand
@@ -317,10 +404,13 @@ partial def evalVibeCore (stx : Syntax) (hint : String) (attempt : Nat) : Tactic
       let req ← writeRequest site
       let (cmd, args) ← agentCommand
       let args ← withLlm (args ++ #["run", toString req])
+      -- the marker first, so the watcher never sees a job that has not started yet
+      IO.FS.writeFile ((← jobsDir) / s!"{site.key}.json") "{}"
       let _ ← IO.Process.spawn { cmd, args, stdin := .null, stdout := .null, stderr := .null }
       g.admit
-      logWarningAt stx m!"vibe: started job {site.key}; the result appears on the next \
-        elaboration of this file"
+      logWarningAt stx m!"vibe: started job {site.key}; its result will be shown here"
+      pushPending stx site
+      watchJob stx site.key
 
 @[tactic vibeTac] def evalVibe : Tactic := fun stx => do
   let hint := match stx[1].getOptional? with

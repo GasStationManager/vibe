@@ -3,3 +3,4 @@
 /.vibe/jobs
 __pycache__/
 /.vibe-test
+/.vibe-test-server

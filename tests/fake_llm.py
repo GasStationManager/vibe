@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """A fake agent CLI for tests: reads the vibe prompt on stdin and writes the
 candidate named by $FAKE_CANDIDATE (a JSON file) to the path the prompt asks for."""
-import os, re, sys, shutil
+import os, re, sys, shutil, time
 prompt = sys.stdin.read()
+time.sleep(float(os.environ.get("FAKE_DELAY", "0")))
 m = re.search(r"Write a JSON file to `([^`]+)`", prompt)
 src = os.environ["FAKE_CANDIDATE"]
 # FAKE_CANDIDATE may list several files separated by ':' -- one per round.
